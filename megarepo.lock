@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "members": {
+    "effect": {
+      "url": "https://github.com/effect-ts/effect",
+      "ref": "main",
+      "commit": "12b1f1eadf649e30dec581b7351ba3abb12f8004",
+      "pinned": false,
+      "lockedAt": "2026-02-15T00:00:00.000Z"
+    }
+  }
+}
