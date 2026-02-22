@@ -1,6 +1,6 @@
 # mr sync — nested megarepo.lock not updated
 
-`mr sync` updates `devenv.lock` and `flake.lock` in member repos to match the parent `megarepo.lock`, but does NOT update nested `megarepo.lock` files. This causes `mr sync --frozen` to fail in CI when a nested megarepo references a shared dependency at a stale commit.
+`mr sync` updates `devenv.lock`/`flake.lock` in member repos to match the parent `megarepo.lock`, but does NOT update nested `megarepo.lock` files. This causes `mr sync --frozen` to fail in CI when a nested megarepo references a shared dependency at a stale commit.
 
 ## Reproduction
 
@@ -12,20 +12,21 @@ cd 2026-02-mr-nested-megarepo-lock
 ./repro.sh
 ```
 
+The script creates a temporary parent megarepo with two public members:
+- `effect-ts/effect` — shared dependency
+- `livestorejs/livestore` — a real megarepo that also references `effect-ts/effect` in its own `megarepo.lock`
+
+After `mr sync --pull`, the parent gets the latest effect commit. The script then compares:
+- `repos/livestore/devenv.lock` — **updated** (effect rev matches parent)
+- `repos/livestore/megarepo.lock` — **NOT updated** (effect commit is stale)
+
 ## Expected
 
-`mr sync` should update `repos/nested-megarepo/megarepo.lock` to match the parent's effect commit.
+`mr sync` should update `megarepo.lock` entries in nested megarepos when the parent tracks a newer commit for the same member.
 
 ## Actual
 
-The nested `megarepo.lock` retains its old effect commit. Only `devenv.lock`/`flake.lock` files are synced.
-
-```
-=== Result ===
-  BUG CONFIRMED: nested megarepo.lock was NOT updated by mr sync
-  Parent:  ab3b64c20a03
-  Nested:  12b1f1eadf64
-```
+Only `devenv.lock`/`flake.lock` files are synced. Nested `megarepo.lock` files are ignored.
 
 ## Versions
 

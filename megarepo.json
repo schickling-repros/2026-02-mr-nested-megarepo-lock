@@ -1,5 +1,6 @@
 {
   "members": {
-    "effect": "effect-ts/effect"
+    "effect": "effect-ts/effect",
+    "livestore": "livestorejs/livestore#dev"
   }
 }

@@ -3,23 +3,17 @@
 #
 # Prerequisites: `mr` (megarepo CLI) in PATH
 #
-# This script:
-# 1. Creates a temporary parent megarepo referencing effect-ts/effect + this repo
-# 2. Runs `mr sync` to populate members
-# 3. Shows that the nested megarepo.lock (in this repo) is NOT updated
-#    even though the parent has a newer effect commit
+# Uses real public repos that use megarepo:
+# - livestorejs/livestore — a real megarepo that references effect-ts/effect
+# - effect-ts/effect — shared dependency
+#
+# After syncing, livestore's devenv.lock effect entry is updated to match
+# the parent, but livestore's megarepo.lock effect entry is NOT.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-
-# The "old" effect commit baked into this repo's megarepo.lock
-OLD_EFFECT_COMMIT="12b1f1eadf649e30dec581b7351ba3abb12f8004"
-# A newer effect commit (the parent will track this)
-NEW_EFFECT_COMMIT="ab3b64c20a039eb4d573fe757c41278925b22687"
-
 echo "=== Setup ==="
-echo "This repo's megarepo.lock has effect @ ${OLD_EFFECT_COMMIT:0:12} (old)"
-echo "Parent megarepo will track effect @ ${NEW_EFFECT_COMMIT:0:12} (new)"
+echo "Creating a parent megarepo with livestore + effect as members."
+echo "livestore is itself a megarepo whose megarepo.lock references effect."
 echo ""
 
 # Create a temporary parent megarepo
@@ -28,45 +22,79 @@ trap "rm -rf '$TMPDIR'" EXIT
 
 cd "$TMPDIR"
 
-cat > megarepo.json << MJSON
+cat > megarepo.json << 'MJSON'
 {
   "members": {
     "effect": "effect-ts/effect",
-    "nested-megarepo": "schickling-repros/2026-02-mr-nested-megarepo-lock"
+    "livestore": "livestorejs/livestore#dev"
   }
 }
 MJSON
 
-echo "=== Step 1: mr sync (initial — populates store + lock) ==="
-mr sync 2>&1 | tail -1 | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'  Synced {len(d[\"results\"])} members')" || true
+echo "=== Step 1: mr sync (ensure members exist in store) ==="
+mr sync 2>&1 | tail -1 | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+for r in d['results']:
+    print(f'  {r[\"name\"]}: {r[\"status\"]} @ {r.get(\"commit\",\"?\")[:12]}')
+" || true
 echo ""
 
-echo "=== Step 2: Verify parent megarepo.lock has latest effect commit ==="
+# The parent megarepo.lock now has commits for both members.
+# The key insight: the parent's effect commit will differ from
+# livestore's megarepo.lock effect commit (because livestore's lock
+# was committed at an earlier point in time).
+
+echo "=== Step 2: Parent megarepo.lock ==="
 PARENT_EFFECT=$(python3 -c "import json; print(json.load(open('megarepo.lock'))['members']['effect']['commit'])")
-echo "  Parent effect commit: ${PARENT_EFFECT:0:12}"
+echo "  effect: ${PARENT_EFFECT:0:12}"
 echo ""
 
-echo "=== Step 3: Check nested megarepo.lock ==="
-NESTED_LOCK="repos/nested-megarepo/megarepo.lock"
+echo "=== Step 3: Nested megarepo.lock (repos/livestore/megarepo.lock) ==="
+NESTED_LOCK="repos/livestore/megarepo.lock"
 if [ ! -f "$NESTED_LOCK" ]; then
-  echo "  ERROR: nested megarepo.lock not found at $NESTED_LOCK"
+  echo "  ERROR: $NESTED_LOCK not found"
   exit 1
 fi
 
-NESTED_EFFECT=$(python3 -c "import json; print(json.load(open('$NESTED_LOCK'))['members']['effect']['commit'])")
-echo "  Nested effect commit: ${NESTED_EFFECT:0:12}"
+NESTED_EFFECT=$(python3 -c "
+import json
+lock = json.load(open('$NESTED_LOCK'))
+e = lock['members'].get('effect')
+print(e['commit'] if e else 'NOT FOUND')
+")
+echo "  effect: ${NESTED_EFFECT:0:12}"
+echo ""
+
+echo "=== Step 4: Check devenv.lock (for comparison — this IS synced) ==="
+DEVENV_LOCK="repos/livestore/devenv.lock"
+if [ -f "$DEVENV_LOCK" ]; then
+  python3 -c "
+import json
+devenv = json.load(open('$DEVENV_LOCK'))
+for name, node in devenv['nodes'].items():
+    locked = node.get('locked', {})
+    if locked.get('owner') == 'effect-ts' and locked.get('repo') == 'effect':
+        print(f'  devenv.lock/{name}: {locked[\"rev\"][:12]}')
+        break
+"
+else
+  echo "  (no devenv.lock)"
+fi
 echo ""
 
 echo "=== Result ==="
 if [ "$PARENT_EFFECT" != "$NESTED_EFFECT" ]; then
-  echo "  BUG CONFIRMED: nested megarepo.lock was NOT updated by mr sync"
-  echo "  Parent:  ${PARENT_EFFECT:0:12}"
-  echo "  Nested:  ${NESTED_EFFECT:0:12}"
+  echo "BUG CONFIRMED: mr sync updated devenv.lock but NOT nested megarepo.lock"
   echo ""
-  echo "  Expected: mr sync should update nested megarepo.lock entries"
-  echo "  Actual:   only devenv.lock/flake.lock are updated, megarepo.lock is ignored"
+  echo "  Parent megarepo.lock  → effect: ${PARENT_EFFECT:0:12}"
+  echo "  Nested megarepo.lock  → effect: ${NESTED_EFFECT:0:12}  ← STALE"
+  echo "  Nested devenv.lock    → effect: (updated by nix lock sync)"
+  echo ""
+  echo "Expected: mr sync should also update megarepo.lock entries in nested megarepos"
+  echo "Actual:   only devenv.lock/flake.lock are updated"
   exit 1
 else
-  echo "  No drift — nested megarepo.lock is in sync (bug may be fixed)"
+  echo "No drift — bug may be fixed"
   exit 0
 fi
